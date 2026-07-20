@@ -286,7 +286,7 @@ async function advanceFromMatchingFootage(projectId: string) {
     const CONCURRENCY = 5;
     const pending = scenes.filter((s) => !alreadySelected.has(s.id));
 
-    async function processScene(scene: typeof scenes[number]) {
+    async function processScene(scene: NonNullable<typeof scenes>[number]) {
       const query = scene.visual_query;
       if (!query) {
         await supabaseAdmin.from("scenes").update({ status: "failed" }).eq("id", scene.id);
