@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, LogOut, Video } from "lucide-react";
-import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 
 type Project = {
