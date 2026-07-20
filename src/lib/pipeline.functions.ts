@@ -283,12 +283,14 @@ async function advanceFromMatchingFootage(projectId: string) {
     const orientation = orientationForAspect(project.aspect_ratio);
     const targetWidth = targetWidthForAspect(project.aspect_ratio);
 
-    for (const scene of scenes) {
-      if (alreadySelected.has(scene.id)) continue;
+    const CONCURRENCY = 5;
+    const pending = scenes.filter((s) => !alreadySelected.has(s.id));
+
+    async function processScene(scene: NonNullable<typeof scenes>[number]) {
       const query = scene.visual_query;
       if (!query) {
         await supabaseAdmin.from("scenes").update({ status: "failed" }).eq("id", scene.id);
-        continue;
+        return;
       }
       const minDuration = Math.max(
         1,
@@ -299,11 +301,11 @@ async function advanceFromMatchingFootage(projectId: string) {
         orientation,
         minDurationSec: minDuration,
         targetWidth,
-        usedIds,
+        usedIds: [...usedIds],
       });
       if (!result) {
         await supabaseAdmin.from("scenes").update({ status: "failed" }).eq("id", scene.id);
-        continue;
+        return;
       }
 
       const { pick, chosenFile } = result;
@@ -341,6 +343,14 @@ async function advanceFromMatchingFootage(projectId: string) {
         .eq("id", scene.id);
       usedIds.push(pick.provider_clip_id);
     }
+
+    // Process all remaining scenes in this single call, with limited
+    // concurrency so a 50-scene project finishes in seconds, not minutes.
+    for (let i = 0; i < pending.length; i += CONCURRENCY) {
+      const batch = pending.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map((s) => processScene(s)));
+    }
+
 
     await supabaseAdmin
       .from("projects")
