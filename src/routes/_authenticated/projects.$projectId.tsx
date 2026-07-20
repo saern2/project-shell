@@ -37,8 +37,9 @@ type Scene = {
 const STATUS_STEPS: Array<{ key: string; label: string; pct: number }> = [
   { key: "uploading", label: "Uploading audio", pct: 15 },
   { key: "draft", label: "Audio uploaded", pct: 25 },
-  { key: "transcribing", label: "Transcribing", pct: 50 },
-  { key: "generating_scenes", label: "Generating scenes", pct: 80 },
+  { key: "transcribing", label: "Transcribing", pct: 40 },
+  { key: "generating_scenes", label: "Generating scenes", pct: 65 },
+  { key: "matching_footage", label: "Matching footage", pct: 85 },
   { key: "ready", label: "Ready", pct: 100 },
 ];
 
@@ -54,7 +55,8 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "Failed",
 };
 
-const IN_PROGRESS = new Set(["transcribing", "generating_scenes"]);
+const IN_PROGRESS = new Set(["transcribing", "generating_scenes", "matching_footage"]);
+
 
 function ProjectDetail() {
   const { projectId } = Route.useParams();
