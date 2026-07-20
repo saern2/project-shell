@@ -105,6 +105,10 @@ export const pollPipeline = createServerFn({ method: "POST" })
     if (project.status === "generating_scenes") {
       return await advanceFromGeneratingScenes(projectId);
     }
+    if (project.status === "matching_footage") {
+      return await advanceFromMatchingFootage(projectId);
+    }
+
     return {
       status: project.status,
       error_message: project.error_message,
