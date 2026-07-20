@@ -23,6 +23,7 @@ export type AsrJobStatus =
       language: string | null;
       words: AsrWord[];
       sentences: AsrSentence[];
+      duration_sec: number | null;
     }
   | { state: "failed"; error: string };
 
