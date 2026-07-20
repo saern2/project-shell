@@ -201,30 +201,9 @@ export async function searchStockFootage(opts: {
 
 async function bumpUsage(provider: string, opts: { cache_hit: boolean }) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const today = new Date().toISOString().slice(0, 10);
-  const column = opts.cache_hit ? "cache_hit_count" : "request_count";
-  // Try increment via RPC-less pattern: fetch existing row, upsert.
-  const { data: existing } = await supabaseAdmin
-    .from("provider_usage")
-    .select("id, request_count, cache_hit_count")
-    .eq("provider", provider)
-    .eq("usage_date", today)
-    .maybeSingle();
-  if (existing) {
-    await supabaseAdmin
-      .from("provider_usage")
-      .update({
-        request_count: existing.request_count + (opts.cache_hit ? 0 : 1),
-        cache_hit_count: existing.cache_hit_count + (opts.cache_hit ? 1 : 0),
-      })
-      .eq("id", existing.id);
-  } else {
-    await supabaseAdmin.from("provider_usage").insert({
-      provider,
-      usage_date: today,
-      request_count: opts.cache_hit ? 0 : 1,
-      cache_hit_count: opts.cache_hit ? 1 : 0,
-    });
-    void column;
-  }
+  await supabaseAdmin.rpc("increment_provider_usage", {
+    p_provider: provider,
+    p_date: new Date().toISOString().slice(0, 10),
+    p_cache_hit: opts.cache_hit,
+  });
 }

@@ -1,0 +1,1 @@
+revoke execute on function public.increment_provider_usage(text, date, boolean) from public, anon, authenticated;
