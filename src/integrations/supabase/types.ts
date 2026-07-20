@@ -423,7 +423,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      increment_provider_usage: {
+        Args: { p_cache_hit: boolean; p_date: string; p_provider: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
