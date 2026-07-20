@@ -84,7 +84,11 @@ function ProjectDetail() {
   const isReady = project?.status === "ready" || project?.status === "completed";
 
   const scenesQuery = useQuery({
-    enabled: !!project && (isReady || project.status === "generating_scenes"),
+    enabled:
+      !!project &&
+      (isReady ||
+        project.status === "generating_scenes" ||
+        project.status === "matching_footage"),
     queryKey: ["scenes", projectId],
     queryFn: async (): Promise<Scene[]> => {
       const { data, error } = await supabase
@@ -95,8 +99,60 @@ function ProjectDetail() {
       if (error) throw error;
       return data as Scene[];
     },
-    refetchInterval: (query) => (project?.status === "generating_scenes" ? 3000 : false),
+    refetchInterval: (query) =>
+      project?.status === "generating_scenes" || project?.status === "matching_footage" ? 3000 : false,
   });
+
+  const clipsQuery = useQuery({
+    enabled: !!project && (isReady || project.status === "matching_footage"),
+    queryKey: ["selected-clips", projectId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("selected_clips")
+        .select(
+          "scene_id, in_point, out_point, clip_candidates!inner(id, url, thumbnail_url, duration_sec, provider, provider_clip_id)",
+        )
+        .in(
+          "scene_id",
+          (
+            await supabase.from("scenes").select("id").eq("project_id", projectId)
+          ).data?.map((s) => s.id) ?? [],
+        );
+      if (error) throw error;
+      return data ?? [];
+    },
+    refetchInterval: (query) => (project?.status === "matching_footage" ? 3000 : false),
+  });
+  const clipsByScene = useMemo(() => {
+    const map = new Map<string, { thumb: string | null; url: string; duration: number }>();
+    for (const row of clipsQuery.data ?? []) {
+      const c = (row as unknown as {
+        scene_id: string;
+        clip_candidates: { thumbnail_url: string | null; url: string; duration_sec: number };
+      });
+      map.set(c.scene_id, {
+        thumb: c.clip_candidates.thumbnail_url,
+        url: c.clip_candidates.url,
+        duration: Number(c.clip_candidates.duration_sec),
+      });
+    }
+    return map;
+  }, [clipsQuery.data]);
+
+  const runSwap = useServerFn(swapSceneClip);
+  const [swappingId, setSwappingId] = useState<string | null>(null);
+  const handleSwap = async (sceneId: string) => {
+    setSwappingId(sceneId);
+    try {
+      await runSwap({ data: { sceneId } });
+      await queryClient.invalidateQueries({ queryKey: ["selected-clips", projectId] });
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSwappingId(null);
+    }
+  };
+
 
   // Poll the pipeline server function whenever the project is mid-flight.
   useEffect(() => {
