@@ -219,20 +219,19 @@ async function advanceFromGeneratingScenes(projectId: string) {
     const { generateVisualQueries } = await import("@/lib/visual-queries.server");
     const queries = await generateVisualQueries(scenes.map((s) => s.text));
 
-    // Update each scene with its visual_query. Sequential is fine at this size.
     for (let i = 0; i < scenes.length; i++) {
       const { error: uErr } = await supabaseAdmin
         .from("scenes")
-        .update({ visual_query: queries[i] })
+        .update({ visual_query: queries[i], status: "query_ready" })
         .eq("id", scenes[i].id);
       if (uErr) throw new Error(uErr.message);
     }
 
     await supabaseAdmin
       .from("projects")
-      .update({ status: "ready", error_message: null })
+      .update({ status: "matching_footage", error_message: null })
       .eq("id", projectId);
-    return { status: "ready", error_message: null };
+    return { status: "matching_footage", error_message: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Visual query generation failed.";
     await supabaseAdmin
@@ -242,3 +241,189 @@ async function advanceFromGeneratingScenes(projectId: string) {
     return { status: "failed", error_message: message };
   }
 }
+
+async function advanceFromMatchingFootage(projectId: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  try {
+    const { data: project, error: pErr } = await supabaseAdmin
+      .from("projects")
+      .select("id, aspect_ratio")
+      .eq("id", projectId)
+      .single();
+    if (pErr || !project) throw new Error(pErr?.message ?? "Project not found.");
+
+    const { data: scenes, error } = await supabaseAdmin
+      .from("scenes")
+      .select("id, idx, text, start_ts, end_ts, visual_query")
+      .eq("project_id", projectId)
+      .order("idx", { ascending: true });
+    if (error) throw new Error(error.message);
+    if (!scenes || scenes.length === 0) {
+      await supabaseAdmin.from("projects").update({ status: "ready" }).eq("id", projectId);
+      return { status: "ready", error_message: null };
+    }
+
+    // Existing selections (idempotent re-runs). Skip scenes already selected.
+    const { data: existingSel } = await supabaseAdmin
+      .from("selected_clips")
+      .select("scene_id, clip_candidates!inner(provider_clip_id)")
+      .in("scene_id", scenes.map((s) => s.id));
+    const alreadySelected = new Set((existingSel ?? []).map((r) => r.scene_id));
+    const usedIds: string[] = (existingSel ?? [])
+      .map((r) => (r as { clip_candidates: { provider_clip_id: string } | null }).clip_candidates?.provider_clip_id)
+      .filter((x): x is string => !!x);
+
+    const { searchStockFootage, orientationForAspect, targetWidthForAspect } = await import(
+      "@/lib/stock.server"
+    );
+    const orientation = orientationForAspect(project.aspect_ratio);
+    const targetWidth = targetWidthForAspect(project.aspect_ratio);
+
+    for (const scene of scenes) {
+      if (alreadySelected.has(scene.id)) continue;
+      const query = scene.visual_query;
+      if (!query) {
+        await supabaseAdmin.from("scenes").update({ status: "failed" }).eq("id", scene.id);
+        continue;
+      }
+      const minDuration = Math.max(
+        1,
+        Math.ceil(Number(scene.end_ts) - Number(scene.start_ts)),
+      );
+      const result = await searchStockFootage({
+        query,
+        orientation,
+        minDurationSec: minDuration,
+        targetWidth,
+        usedIds,
+      });
+      if (!result) {
+        await supabaseAdmin.from("scenes").update({ status: "failed" }).eq("id", scene.id);
+        continue;
+      }
+
+      const { pick, chosenFile } = result;
+      const { data: candidate, error: cErr } = await supabaseAdmin
+        .from("clip_candidates")
+        .insert({
+          scene_id: scene.id,
+          provider: pick.provider,
+          provider_clip_id: pick.provider_clip_id,
+          url: chosenFile.url,
+          thumbnail_url: pick.thumbnail_url,
+          width: chosenFile.width,
+          height: chosenFile.height,
+          duration_sec: pick.duration_sec,
+        })
+        .select("id")
+        .single();
+      if (cErr || !candidate) throw new Error(cErr?.message ?? "Failed to save candidate.");
+
+      const sceneDuration = Number(scene.end_ts) - Number(scene.start_ts);
+      const { error: sErr } = await supabaseAdmin.from("selected_clips").upsert(
+        {
+          scene_id: scene.id,
+          clip_candidate_id: candidate.id,
+          in_point: 0,
+          out_point: Math.min(pick.duration_sec, Math.max(sceneDuration, 1)),
+        },
+        { onConflict: "scene_id" },
+      );
+      if (sErr) throw new Error(sErr.message);
+
+      await supabaseAdmin
+        .from("scenes")
+        .update({ status: "selected" })
+        .eq("id", scene.id);
+      usedIds.push(pick.provider_clip_id);
+    }
+
+    await supabaseAdmin
+      .from("projects")
+      .update({ status: "ready", error_message: null })
+      .eq("id", projectId);
+    return { status: "ready", error_message: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Stock footage matching failed.";
+    await supabaseAdmin
+      .from("projects")
+      .update({ status: "failed", error_message: message })
+      .eq("id", projectId);
+    return { status: "failed", error_message: message };
+  }
+}
+
+// Swap the selected clip for a single scene: search again, excluding all
+// clip candidates already tried for this scene so the result is different.
+const SwapInput = z.object({ sceneId: z.string().uuid() });
+
+export const swapSceneClip = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => SwapInput.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    // Load scene + project (RLS scoped)
+    const { data: scene, error: sErr } = await supabase
+      .from("scenes")
+      .select("id, project_id, text, start_ts, end_ts, visual_query, projects!inner(user_id, aspect_ratio)")
+      .eq("id", data.sceneId)
+      .maybeSingle();
+    if (sErr) throw new Error(sErr.message);
+    if (!scene) throw new Error("Scene not found.");
+    const project = (scene as unknown as { projects: { user_id: string; aspect_ratio: string } }).projects;
+    if (project.user_id !== userId) throw new Error("Forbidden.");
+    if (!scene.visual_query) throw new Error("Scene has no visual query.");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    // Exclude every candidate already tried for this scene
+    const { data: prior } = await supabaseAdmin
+      .from("clip_candidates")
+      .select("provider_clip_id")
+      .eq("scene_id", scene.id);
+    const usedIds = (prior ?? []).map((r) => r.provider_clip_id);
+
+    const { searchStockFootage, orientationForAspect, targetWidthForAspect } = await import(
+      "@/lib/stock.server"
+    );
+    const minDuration = Math.max(1, Math.ceil(Number(scene.end_ts) - Number(scene.start_ts)));
+    const result = await searchStockFootage({
+      query: scene.visual_query,
+      orientation: orientationForAspect(project.aspect_ratio),
+      minDurationSec: minDuration,
+      targetWidth: targetWidthForAspect(project.aspect_ratio),
+      usedIds,
+    });
+    if (!result) throw new Error("No alternate clips available for this scene.");
+    const { pick, chosenFile } = result;
+
+    const { data: candidate, error: cErr } = await supabaseAdmin
+      .from("clip_candidates")
+      .insert({
+        scene_id: scene.id,
+        provider: pick.provider,
+        provider_clip_id: pick.provider_clip_id,
+        url: chosenFile.url,
+        thumbnail_url: pick.thumbnail_url,
+        width: chosenFile.width,
+        height: chosenFile.height,
+        duration_sec: pick.duration_sec,
+      })
+      .select("id")
+      .single();
+    if (cErr || !candidate) throw new Error(cErr?.message ?? "Failed to save candidate.");
+
+    const sceneDuration = Number(scene.end_ts) - Number(scene.start_ts);
+    const { error: upErr } = await supabaseAdmin.from("selected_clips").upsert(
+      {
+        scene_id: scene.id,
+        clip_candidate_id: candidate.id,
+        in_point: 0,
+        out_point: Math.min(pick.duration_sec, Math.max(sceneDuration, 1)),
+      },
+      { onConflict: "scene_id" },
+    );
+    if (upErr) throw new Error(upErr.message);
+
+    return { ok: true };
+  });
+
