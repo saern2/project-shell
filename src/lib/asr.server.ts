@@ -125,6 +125,7 @@ export const assemblyAiProvider: AsrProvider = {
       language: json.language_code ?? null,
       words,
       sentences,
+      duration_sec: typeof json.audio_duration === "number" ? json.audio_duration : null,
     };
   },
 };
