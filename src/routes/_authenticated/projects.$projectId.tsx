@@ -1,15 +1,15 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { pollPipeline, startPipeline } from "@/lib/pipeline.functions";
+import { pollPipeline, startPipeline, swapSceneClip } from "@/lib/pipeline.functions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
-import { ArrowLeft, RotateCcw, AlertTriangle } from "lucide-react";
+import { ArrowLeft, RotateCcw, AlertTriangle, Shuffle } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/projects/$projectId")({
@@ -37,8 +37,9 @@ type Scene = {
 const STATUS_STEPS: Array<{ key: string; label: string; pct: number }> = [
   { key: "uploading", label: "Uploading audio", pct: 15 },
   { key: "draft", label: "Audio uploaded", pct: 25 },
-  { key: "transcribing", label: "Transcribing", pct: 50 },
-  { key: "generating_scenes", label: "Generating scenes", pct: 80 },
+  { key: "transcribing", label: "Transcribing", pct: 40 },
+  { key: "generating_scenes", label: "Generating scenes", pct: 65 },
+  { key: "matching_footage", label: "Matching footage", pct: 85 },
   { key: "ready", label: "Ready", pct: 100 },
 ];
 
@@ -54,7 +55,8 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "Failed",
 };
 
-const IN_PROGRESS = new Set(["transcribing", "generating_scenes"]);
+const IN_PROGRESS = new Set(["transcribing", "generating_scenes", "matching_footage"]);
+
 
 function ProjectDetail() {
   const { projectId } = Route.useParams();
@@ -82,7 +84,11 @@ function ProjectDetail() {
   const isReady = project?.status === "ready" || project?.status === "completed";
 
   const scenesQuery = useQuery({
-    enabled: !!project && (isReady || project.status === "generating_scenes"),
+    enabled:
+      !!project &&
+      (isReady ||
+        project.status === "generating_scenes" ||
+        project.status === "matching_footage"),
     queryKey: ["scenes", projectId],
     queryFn: async (): Promise<Scene[]> => {
       const { data, error } = await supabase
@@ -93,8 +99,60 @@ function ProjectDetail() {
       if (error) throw error;
       return data as Scene[];
     },
-    refetchInterval: (query) => (project?.status === "generating_scenes" ? 3000 : false),
+    refetchInterval: (query) =>
+      project?.status === "generating_scenes" || project?.status === "matching_footage" ? 3000 : false,
   });
+
+  const clipsQuery = useQuery({
+    enabled: !!project && (isReady || project.status === "matching_footage"),
+    queryKey: ["selected-clips", projectId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("selected_clips")
+        .select(
+          "scene_id, in_point, out_point, clip_candidates!inner(id, url, thumbnail_url, duration_sec, provider, provider_clip_id)",
+        )
+        .in(
+          "scene_id",
+          (
+            await supabase.from("scenes").select("id").eq("project_id", projectId)
+          ).data?.map((s) => s.id) ?? [],
+        );
+      if (error) throw error;
+      return data ?? [];
+    },
+    refetchInterval: (query) => (project?.status === "matching_footage" ? 3000 : false),
+  });
+  const clipsByScene = useMemo(() => {
+    const map = new Map<string, { thumb: string | null; url: string; duration: number }>();
+    for (const row of clipsQuery.data ?? []) {
+      const c = (row as unknown as {
+        scene_id: string;
+        clip_candidates: { thumbnail_url: string | null; url: string; duration_sec: number };
+      });
+      map.set(c.scene_id, {
+        thumb: c.clip_candidates.thumbnail_url,
+        url: c.clip_candidates.url,
+        duration: Number(c.clip_candidates.duration_sec),
+      });
+    }
+    return map;
+  }, [clipsQuery.data]);
+
+  const runSwap = useServerFn(swapSceneClip);
+  const [swappingId, setSwappingId] = useState<string | null>(null);
+  const handleSwap = async (sceneId: string) => {
+    setSwappingId(sceneId);
+    try {
+      await runSwap({ data: { sceneId } });
+      await queryClient.invalidateQueries({ queryKey: ["selected-clips", projectId] });
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSwappingId(null);
+    }
+  };
+
 
   // Poll the pipeline server function whenever the project is mid-flight.
   useEffect(() => {
@@ -229,7 +287,64 @@ function ProjectDetail() {
               </CardContent>
             </Card>
 
-            {(isReady || project.status === "generating_scenes") && (
+            {(isReady || project.status === "matching_footage") && scenesQuery.data && scenesQuery.data.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Timeline</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-3 overflow-x-auto pb-2">
+                    {scenesQuery.data.map((s) => {
+                      const clip = clipsByScene.get(s.id);
+                      const sceneDur = Number(s.end_ts) - Number(s.start_ts);
+                      const isSwapping = swappingId === s.id;
+                      return (
+                        <div
+                          key={s.id}
+                          className="group relative w-40 shrink-0 overflow-hidden rounded-md border bg-muted"
+                        >
+                          <div className="relative aspect-video w-full bg-muted-foreground/10">
+                            {clip?.thumb ? (
+                              <img
+                                src={clip.thumb}
+                                alt={s.visual_query ?? ""}
+                                className="h-full w-full object-cover"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+                                {project.status === "matching_footage" ? "Matching…" : "No clip"}
+                              </div>
+                            )}
+                            {clip && isReady ? (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={isSwapping}
+                                onClick={() => handleSwap(s.id)}
+                                className="absolute right-1 top-1 h-7 px-2 opacity-0 shadow transition-opacity group-hover:opacity-100"
+                              >
+                                <Shuffle className="mr-1 h-3 w-3" />
+                                {isSwapping ? "…" : "Swap"}
+                              </Button>
+                            ) : null}
+                          </div>
+                          <div className="p-2 text-xs">
+                            <div className="flex items-center justify-between text-muted-foreground">
+                              <span>Scene {s.idx + 1}</span>
+                              <span>{sceneDur.toFixed(1)}s</span>
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-foreground/90">{s.text}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {(isReady || project.status === "generating_scenes" || project.status === "matching_footage") && (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base">
@@ -244,10 +359,7 @@ function ProjectDetail() {
                   ) : (
                     <ol className="space-y-4">
                       {scenesQuery.data.map((s) => (
-                        <li
-                          key={s.id}
-                          className="rounded-md border p-4"
-                        >
+                        <li key={s.id} className="rounded-md border p-4">
                           <div className="mb-2 flex items-center justify-between gap-4 text-xs text-muted-foreground">
                             <span>Scene {s.idx + 1}</span>
                             <span>
@@ -273,6 +385,7 @@ function ProjectDetail() {
                 </CardContent>
               </Card>
             )}
+
           </div>
         )}
       </main>
