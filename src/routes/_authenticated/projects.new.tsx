@@ -21,11 +21,13 @@ const MAX_BYTES = 500 * 1024 * 1024; // 500 MB
 
 function NewProject() {
   const navigate = useNavigate();
+  const runStartPipeline = useServerFn(startPipeline);
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState<string>("");
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
