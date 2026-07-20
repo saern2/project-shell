@@ -1,0 +1,288 @@
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useEffect, useMemo } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { pollPipeline, startPipeline } from "@/lib/pipeline.functions";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Progress } from "@/components/ui/progress";
+import { ArrowLeft, RotateCcw, AlertTriangle } from "lucide-react";
+import { toast } from "sonner";
+
+export const Route = createFileRoute("/_authenticated/projects/$projectId")({
+  component: ProjectDetail,
+});
+
+type Project = {
+  id: string;
+  name: string;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type Scene = {
+  id: string;
+  idx: number;
+  text: string;
+  start_ts: number;
+  end_ts: number;
+  visual_query: string | null;
+};
+
+const STATUS_STEPS: Array<{ key: string; label: string; pct: number }> = [
+  { key: "uploading", label: "Uploading audio", pct: 15 },
+  { key: "draft", label: "Audio uploaded", pct: 25 },
+  { key: "transcribing", label: "Transcribing", pct: 50 },
+  { key: "generating_scenes", label: "Generating scenes", pct: 80 },
+  { key: "ready", label: "Ready", pct: 100 },
+];
+
+const STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  uploading: "Uploading",
+  transcribing: "Transcribing",
+  generating_scenes: "Generating scenes",
+  matching_footage: "Matching footage",
+  ready: "Ready",
+  rendering: "Rendering",
+  completed: "Completed",
+  failed: "Failed",
+};
+
+const IN_PROGRESS = new Set(["transcribing", "generating_scenes"]);
+
+function ProjectDetail() {
+  const { projectId } = Route.useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const runPoll = useServerFn(pollPipeline);
+  const runStart = useServerFn(startPipeline);
+
+  const projectQuery = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: async (): Promise<Project> => {
+      const { data, error } = await supabase
+        .from("projects")
+        .select("id, name, status, error_message, created_at, updated_at")
+        .eq("id", projectId)
+        .single();
+      if (error) throw error;
+      return data as Project;
+    },
+    // Refetch quickly while the pipeline is running.
+    refetchInterval: (query) => (query.state.data && IN_PROGRESS.has(query.state.data.status) ? 3000 : false),
+  });
+
+  const project = projectQuery.data;
+  const isReady = project?.status === "ready" || project?.status === "completed";
+
+  const scenesQuery = useQuery({
+    enabled: !!project && (isReady || project.status === "generating_scenes"),
+    queryKey: ["scenes", projectId],
+    queryFn: async (): Promise<Scene[]> => {
+      const { data, error } = await supabase
+        .from("scenes")
+        .select("id, idx, text, start_ts, end_ts, visual_query")
+        .eq("project_id", projectId)
+        .order("idx", { ascending: true });
+      if (error) throw error;
+      return data as Scene[];
+    },
+    refetchInterval: (query) => (project?.status === "generating_scenes" ? 3000 : false),
+  });
+
+  // Poll the pipeline server function whenever the project is mid-flight.
+  useEffect(() => {
+    if (!project) return;
+    if (!IN_PROGRESS.has(project.status)) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = async () => {
+      try {
+        await runPoll({ data: { projectId } });
+      } catch (err) {
+        // Surface non-abort errors once; the query refetch will show the failed state.
+        if (!cancelled) toast.error((err as Error).message);
+      }
+      if (!cancelled) {
+        // React Query is refetching the project row on its own interval;
+        // just invalidate to pick up the new status.
+        queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+        timer = setTimeout(tick, 4000);
+      }
+    };
+    tick();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [project?.status, projectId, queryClient, runPoll, project]);
+
+  const progressPct = useMemo(() => {
+    if (!project) return 0;
+    if (project.status === "failed") return 0;
+    return STATUS_STEPS.find((s) => s.key === project.status)?.pct ?? 0;
+  }, [project]);
+
+  const handleRetry = async () => {
+    try {
+      await supabase
+        .from("projects")
+        .update({ status: "draft", error_message: null })
+        .eq("id", projectId);
+      await runStart({ data: { projectId } });
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["scenes", projectId] });
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      <header className="border-b">
+        <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-6 py-4">
+          <div className="flex items-center gap-4">
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/dashboard">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back
+              </Link>
+            </Button>
+            <h1 className="text-lg font-semibold">
+              {project?.name ?? "Loading..."}
+            </h1>
+          </div>
+          {project ? (
+            <Badge variant={project.status === "failed" ? "destructive" : "secondary"}>
+              {STATUS_LABELS[project.status] ?? project.status}
+            </Badge>
+          ) : null}
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-4xl px-6 py-8">
+        {projectQuery.isLoading || !project ? (
+          <Skeleton className="h-40 w-full" />
+        ) : project.status === "failed" ? (
+          <Card className="border-destructive/50">
+            <CardHeader>
+              <div className="flex items-center gap-2 text-destructive">
+                <AlertTriangle className="h-5 w-5" />
+                <CardTitle className="text-base">Pipeline failed</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                {project.error_message ?? "An unknown error occurred."}
+              </p>
+              <Button onClick={handleRetry} variant="outline">
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Retry
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Progress</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Progress value={progressPct} />
+                <ul className="grid gap-2 text-sm sm:grid-cols-2">
+                  {STATUS_STEPS.map((step) => {
+                    const done = progressPct >= step.pct;
+                    const active = project.status === step.key;
+                    return (
+                      <li
+                        key={step.key}
+                        className={`flex items-center gap-2 ${done || active ? "text-foreground" : "text-muted-foreground"}`}
+                      >
+                        <span
+                          className={`inline-block h-2 w-2 rounded-full ${
+                            active
+                              ? "bg-primary animate-pulse"
+                              : done
+                                ? "bg-primary"
+                                : "bg-muted-foreground/30"
+                          }`}
+                        />
+                        {step.label}
+                      </li>
+                    );
+                  })}
+                </ul>
+                {project.status === "draft" ? (
+                  <Button size="sm" onClick={handleRetry}>
+                    Start transcription
+                  </Button>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            {(isReady || project.status === "generating_scenes") && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    Transcript {scenesQuery.data ? `(${scenesQuery.data.length} scenes)` : ""}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {scenesQuery.isLoading ? (
+                    <Skeleton className="h-40 w-full" />
+                  ) : !scenesQuery.data || scenesQuery.data.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No scenes yet.</p>
+                  ) : (
+                    <ol className="space-y-4">
+                      {scenesQuery.data.map((s) => (
+                        <li
+                          key={s.id}
+                          className="rounded-md border p-4"
+                        >
+                          <div className="mb-2 flex items-center justify-between gap-4 text-xs text-muted-foreground">
+                            <span>Scene {s.idx + 1}</span>
+                            <span>
+                              {formatTs(s.start_ts)} – {formatTs(s.end_ts)}
+                            </span>
+                          </div>
+                          <p className="text-sm leading-relaxed">{s.text}</p>
+                          <div className="mt-3">
+                            {s.visual_query ? (
+                              <Badge variant="outline" className="font-mono text-xs">
+                                {s.visual_query}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                Generating visual query…
+                              </span>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function formatTs(sec: number): string {
+  if (!Number.isFinite(sec)) return "0:00";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}

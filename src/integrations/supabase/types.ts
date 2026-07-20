@@ -111,6 +111,7 @@ export type Database = {
           error_message: string | null
           id: string
           name: string
+          provider_job_id: string | null
           status: string
           updated_at: string
           user_id: string
@@ -120,6 +121,7 @@ export type Database = {
           error_message?: string | null
           id?: string
           name?: string
+          provider_job_id?: string | null
           status?: string
           updated_at?: string
           user_id: string
@@ -129,6 +131,7 @@ export type Database = {
           error_message?: string | null
           id?: string
           name?: string
+          provider_job_id?: string | null
           status?: string
           updated_at?: string
           user_id?: string

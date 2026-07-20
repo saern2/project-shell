@@ -1,6 +1,8 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
+import { startPipeline } from "@/lib/pipeline.functions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { ArrowLeft, Upload } from "lucide-react";
 import { toast } from "sonner";
+
 
 export const Route = createFileRoute("/_authenticated/projects/new")({
   component: NewProject,
@@ -18,11 +21,13 @@ const MAX_BYTES = 500 * 1024 * 1024; // 500 MB
 
 function NewProject() {
   const navigate = useNavigate();
+  const runStartPipeline = useServerFn(startPipeline);
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState<string>("");
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -105,10 +110,20 @@ function NewProject() {
 
     await supabase.from("projects").update({ status: "draft" }).eq("id", project.id);
 
+    // 5. Kick off transcription. Errors surface on the project detail page.
+    setStage("Starting transcription...");
+    try {
+      await runStartPipeline({ data: { projectId: project.id } });
+    } catch (err) {
+      // Pipeline server function already marked the project failed with a message.
+      toast.error((err as Error).message);
+    }
+
     setBusy(false);
     toast.success("Project created.");
-    navigate({ to: "/dashboard" });
+    navigate({ to: "/projects/$projectId", params: { projectId: project.id } });
   };
+
 
   return (
     <div className="min-h-screen bg-background">
