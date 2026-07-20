@@ -1,0 +1,54 @@
+# docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# LOCAL DEVELOPMENT ONLY — do not use in production.
+#
+# In production:
+#   - Use a managed Redis instance (Upstash, Redis Cloud, AWS ElastiCache)
+#   - Set REDIS_URL in the worker's environment to the managed Redis URL
+#   - Run the worker as a container on your managed infrastructure
+#
+# Usage:
+#   docker-compose up redis        # start Redis only (use with npm run dev)
+#   docker-compose up              # start Redis + worker together
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: '3.9'
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NODE_ENV=development
+    volumes:
+      # Mount a shared output volume — only useful for single-instance local dev.
+      # In production, use output_upload_url (Supabase pre-signed PUT) instead.
+      - render_outputs:/tmp/renders
+      - render_tmp:/tmp/render-tmp
+    ports:
+      - "3001:3001"
+
+volumes:
+  redis_data:
+  render_outputs:
+  render_tmp:
