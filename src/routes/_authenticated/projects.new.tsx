@@ -108,7 +108,7 @@ function NewProject() {
       return;
     }
 
-    await supabase.from("projects").update({ status: "draft" }).eq("id", project.id);
+    await supabase.from("projects").update({ status: "uploaded" }).eq("id", project.id);
 
     // 5. Kick off transcription. Errors surface on the project detail page.
     setStage("Starting transcription...");
