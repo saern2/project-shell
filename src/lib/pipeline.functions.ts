@@ -126,16 +126,17 @@ async function advanceFromTranscribing(projectId: string, providerJobId: string 
     const provider = getAsrProvider();
     const result = await provider.poll(providerJobId);
 
-    if (result.state === "queued" || result.state === "processing") {
+    if (result.state !== "completed") {
+      if (result.state === "failed") {
+        await supabaseAdmin
+          .from("projects")
+          .update({ status: "failed", error_message: `Transcription failed: ${result.error}` })
+          .eq("id", projectId);
+        return { status: "failed", error_message: result.error };
+      }
       return { status: "transcribing", error_message: null };
     }
-    if (result.state === "failed") {
-      await supabaseAdmin
-        .from("projects")
-        .update({ status: "failed", error_message: `Transcription failed: ${result.error}` })
-        .eq("id", projectId);
-      return { status: "failed", error_message: result.error };
-    }
+
 
     // Completed. Find audio asset id (for FK).
     const { data: asset } = await supabaseAdmin
