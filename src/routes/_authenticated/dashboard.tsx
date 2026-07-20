@@ -122,25 +122,33 @@ function Dashboard() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((p) => (
-              <Card key={p.id} className="transition-colors hover:bg-accent/40">
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <CardTitle className="text-base">{p.name}</CardTitle>
-                    <Badge variant={STATUS_VARIANTS[p.status] ?? "outline"}>
-                      {STATUS_LABELS[p.status] ?? p.status}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-xs text-muted-foreground">
-                    Updated {formatDistanceToNow(new Date(p.updated_at), { addSuffix: true })}
-                  </p>
-                  {p.error_message ? (
-                    <p className="mt-2 text-xs text-destructive">{p.error_message}</p>
-                  ) : null}
-                </CardContent>
-              </Card>
+              <Link
+                key={p.id}
+                to="/projects/$projectId"
+                params={{ projectId: p.id }}
+                className="block"
+              >
+                <Card className="h-full transition-colors hover:bg-accent/40">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <CardTitle className="text-base">{p.name}</CardTitle>
+                      <Badge variant={STATUS_VARIANTS[p.status] ?? "outline"}>
+                        {STATUS_LABELS[p.status] ?? p.status}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-xs text-muted-foreground">
+                      Updated {formatDistanceToNow(new Date(p.updated_at), { addSuffix: true })}
+                    </p>
+                    {p.error_message ? (
+                      <p className="mt-2 text-xs text-destructive">{p.error_message}</p>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              </Link>
             ))}
+
           </div>
         )}
       </main>
