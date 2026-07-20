@@ -3,7 +3,7 @@ import { useEffect, useMemo } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { pollPipeline, startPipeline } from "@/lib/pipeline.functions";
+import { pollPipeline, startPipeline, swapSceneClip } from "@/lib/pipeline.functions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
