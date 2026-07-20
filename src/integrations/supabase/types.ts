@@ -107,6 +107,7 @@ export type Database = {
       }
       projects: {
         Row: {
+          aspect_ratio: string
           created_at: string
           error_message: string | null
           id: string
@@ -117,6 +118,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          aspect_ratio?: string
           created_at?: string
           error_message?: string | null
           id?: string
@@ -127,6 +129,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          aspect_ratio?: string
           created_at?: string
           error_message?: string | null
           id?: string
@@ -318,6 +321,33 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      stock_search_cache: {
+        Row: {
+          cached_at: string
+          id: string
+          orientation: string
+          provider: string
+          query: string
+          results: Json
+        }
+        Insert: {
+          cached_at?: string
+          id?: string
+          orientation: string
+          provider: string
+          query: string
+          results: Json
+        }
+        Update: {
+          cached_at?: string
+          id?: string
+          orientation?: string
+          provider?: string
+          query?: string
+          results?: Json
+        }
+        Relationships: []
       }
       transcripts: {
         Row: {
