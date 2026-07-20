@@ -110,10 +110,20 @@ function NewProject() {
 
     await supabase.from("projects").update({ status: "draft" }).eq("id", project.id);
 
+    // 5. Kick off transcription. Errors surface on the project detail page.
+    setStage("Starting transcription...");
+    try {
+      await runStartPipeline({ data: { projectId: project.id } });
+    } catch (err) {
+      // Pipeline server function already marked the project failed with a message.
+      toast.error((err as Error).message);
+    }
+
     setBusy(false);
     toast.success("Project created.");
-    navigate({ to: "/dashboard" });
+    navigate({ to: "/projects/$projectId", params: { projectId: project.id } });
   };
+
 
   return (
     <div className="min-h-screen bg-background">
