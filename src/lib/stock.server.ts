@@ -1,5 +1,5 @@
 // Stock footage provider interface + Pexels implementation.
-// Server-only: PEXELS_API_KEY never touches the client.
+// Server-only: PEXELS_API_KEYS never touches the client.
 
 export type StockVideoFile = {
   url: string;
@@ -26,20 +26,56 @@ export interface StockProvider {
 
 const PEXELS_URL = "https://api.pexels.com/videos/search";
 
+function parsePexelsKeys(): string[] {
+  const raw = process.env.PEXELS_API_KEYS ?? process.env.PEXELS_API_KEY ?? "";
+  const keys = raw
+    .split(",")
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0);
+  if (keys.length === 0) {
+    throw new Error(
+      "PEXELS_API_KEYS is not configured or parsed to zero keys. Set PEXELS_API_KEYS to a comma-separated list of Pexels API keys.",
+    );
+  }
+  return keys;
+}
+
+async function pexelsFetch(query: string, orientation: Orientation, page: number): Promise<Response> {
+  const keys = parsePexelsKeys();
+  const params = new URLSearchParams({
+    query,
+    orientation,
+    per_page: "20",
+    page: String(page),
+  });
+  const url = `${PEXELS_URL}?${params.toString()}`;
+
+  const firstIdx = Math.floor(Math.random() * keys.length);
+  const firstKey = keys[firstIdx];
+  const res = await fetch(url, { headers: { authorization: firstKey } });
+  if (res.status !== 401) return res;
+
+  if (keys.length > 1) {
+    const remaining = keys.filter((_, i) => i !== firstIdx);
+    const retryKey = remaining[Math.floor(Math.random() * remaining.length)];
+    const retry = await fetch(url, { headers: { authorization: retryKey } });
+    if (retry.status !== 401) return retry;
+    const detail = await retry.text().catch(() => retry.statusText);
+    throw new Error(
+      `Pexels search failed (401) after trying 2 of ${keys.length} keys: ${detail.slice(0, 200)}`,
+    );
+  }
+
+  const detail = await res.text().catch(() => res.statusText);
+  throw new Error(
+    `Pexels search failed (401) after trying 1 of ${keys.length} keys: ${detail.slice(0, 200)}`,
+  );
+}
+
 export const pexelsProvider: StockProvider = {
   name: "pexels",
   async search(query, orientation, page) {
-    const key = process.env.PEXELS_API_KEY;
-    if (!key) throw new Error("PEXELS_API_KEY is not configured.");
-    const params = new URLSearchParams({
-      query,
-      orientation,
-      per_page: "20",
-      page: String(page),
-    });
-    const res = await fetch(`${PEXELS_URL}?${params.toString()}`, {
-      headers: { authorization: key },
-    });
+    const res = await pexelsFetch(query, orientation, page);
     if (!res.ok) {
       const detail = await res.text().catch(() => res.statusText);
       throw new Error(`Pexels search failed (${res.status}): ${detail.slice(0, 300)}`);
