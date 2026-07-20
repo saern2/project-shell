@@ -86,6 +86,7 @@ export const assemblyAiProvider: AsrProvider = {
       text?: string | null;
       language_code?: string | null;
       error?: string | null;
+      audio_duration?: number | null;
       words?: Array<{ text: string; start: number; end: number; confidence?: number }> | null;
     };
 
