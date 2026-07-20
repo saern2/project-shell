@@ -28,7 +28,7 @@ export const startPipeline = createServerFn({ method: "POST" })
     if (project.user_id !== userId) throw new Error("Forbidden.");
 
     // Idempotent: allow re-triggering only from draft/failed/uploading.
-    if (!["draft", "failed", "uploading"].includes(project.status)) {
+    if (!["draft", "failed", "uploading", "uploaded"].includes(project.status)) {
       return { ok: true, status: project.status };
     }
 

@@ -108,15 +108,22 @@ function NewProject() {
       return;
     }
 
-    await supabase.from("projects").update({ status: "draft" }).eq("id", project.id);
+    await supabase.from("projects").update({ status: "uploaded" }).eq("id", project.id);
 
     // 5. Kick off transcription. Errors surface on the project detail page.
     setStage("Starting transcription...");
     try {
       await runStartPipeline({ data: { projectId: project.id } });
     } catch (err) {
-      // Pipeline server function already marked the project failed with a message.
-      toast.error((err as Error).message);
+      // If the pipeline call never reached the server, the project could sit at
+      // "uploaded" indefinitely. Ensure it surfaces as "failed" either way.
+      const message = (err as Error).message ?? "Failed to start transcription.";
+      await supabase
+        .from("projects")
+        .update({ status: "failed", error_message: message })
+        .eq("id", project.id)
+        .in("status", ["uploaded", "draft"]);
+      toast.error(message);
     }
 
     setBusy(false);
