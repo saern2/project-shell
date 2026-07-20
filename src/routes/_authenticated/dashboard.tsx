@@ -148,5 +148,3 @@ function Dashboard() {
   );
 }
 
-// suppress unused-import lint if toast not otherwise used
-void toast;
