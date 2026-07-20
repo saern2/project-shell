@@ -115,8 +115,15 @@ function NewProject() {
     try {
       await runStartPipeline({ data: { projectId: project.id } });
     } catch (err) {
-      // Pipeline server function already marked the project failed with a message.
-      toast.error((err as Error).message);
+      // If the pipeline call never reached the server, the project could sit at
+      // "uploaded" indefinitely. Ensure it surfaces as "failed" either way.
+      const message = (err as Error).message ?? "Failed to start transcription.";
+      await supabase
+        .from("projects")
+        .update({ status: "failed", error_message: message })
+        .eq("id", project.id)
+        .in("status", ["uploaded", "draft"]);
+      toast.error(message);
     }
 
     setBusy(false);
