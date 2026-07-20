@@ -40,9 +40,15 @@ function NewProject() {
     setStage("Creating project...");
 
     // 1. Create the project row (status: uploading)
+    const { data: userData } = await supabase.auth.getUser();
+    if (!userData.user) {
+      setBusy(false);
+      toast.error("Not signed in.");
+      return;
+    }
     const { data: project, error: projectError } = await supabase
       .from("projects")
-      .insert({ name: name.trim() || "Untitled project", status: "uploading" })
+      .insert({ name: name.trim() || "Untitled project", status: "uploading", user_id: userData.user.id })
       .select("id")
       .single();
 
