@@ -23,6 +23,7 @@ export type AsrJobStatus =
       language: string | null;
       words: AsrWord[];
       sentences: AsrSentence[];
+      duration_sec: number | null;
     }
   | { state: "failed"; error: string };
 
@@ -85,6 +86,7 @@ export const assemblyAiProvider: AsrProvider = {
       text?: string | null;
       language_code?: string | null;
       error?: string | null;
+      audio_duration?: number | null;
       words?: Array<{ text: string; start: number; end: number; confidence?: number }> | null;
     };
 
@@ -123,6 +125,7 @@ export const assemblyAiProvider: AsrProvider = {
       language: json.language_code ?? null,
       words,
       sentences,
+      duration_sec: typeof json.audio_duration === "number" ? json.audio_duration : null,
     };
   },
 };

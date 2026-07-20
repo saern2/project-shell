@@ -151,6 +151,16 @@ async function advanceFromTranscribing(projectId: string, providerJobId: string 
       .limit(1)
       .maybeSingle();
 
+    // Patch audio_assets.duration_sec from the ASR response (AssemblyAI
+    // returns audio_duration in seconds). This is the first point in the
+    // pipeline where we actually know how long the audio is.
+    if (asset?.id && typeof result.duration_sec === "number") {
+      await supabaseAdmin
+        .from("audio_assets")
+        .update({ duration_sec: result.duration_sec })
+        .eq("id", asset.id);
+    }
+
     const { data: transcript, error: tErr } = await supabaseAdmin
       .from("transcripts")
       .insert({
